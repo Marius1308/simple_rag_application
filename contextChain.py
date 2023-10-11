@@ -61,9 +61,9 @@ class contextChain(Chain):
             keyQuestions = self.getKeyQuestions(prompt_value, run_manager=run_manager)
 
             for question in keyQuestions.questions:
-                self.queryDatabaseAndAddToContext(question)
+                self.query_database_and_add_to_context(question)
 
-        response = self.getAnswerWithContext(prompt_value, run_manager=run_manager)
+        response = self.get_answer_with_context(prompt_value, run_manager=run_manager)
 
         return {self.output_key: response}
 
@@ -117,7 +117,7 @@ class contextChain(Chain):
 
         return keyQuestions
 
-    def queryDatabaseAndAddToContext(self, input: str, answers: int = 2):
+    def query_database_and_add_to_context(self, input: str, answers: int = 2):
         if self.db is None:
             return
         docs = self.db.similarity_search(input, k=answers)
@@ -125,7 +125,7 @@ class contextChain(Chain):
             if doc.page_content not in self.context:
                 self.context += input + "\n" + doc.page_content + "\n\n"
 
-    def getAnswerWithContext(
+    def get_answer_with_context(
         self, prompt_value: str, run_manager: Optional[CallbackManagerForChainRun]
     ):
         prompt_msgs = [
