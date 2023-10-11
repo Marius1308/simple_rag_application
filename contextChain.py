@@ -1,45 +1,37 @@
 from __future__ import annotations
 import os
 
-from typing import Any, Dict, List, Optional
-from langchain import LLMChain
-from pydantic import Extra
-from langchain.schema.language_model import BaseLanguageModel
-from langchain.callbacks.manager import (
-    AsyncCallbackManagerForChainRun,
-    CallbackManagerForChainRun,
-)
+from typing import Any, Dict, List, Optional, Sequence
+from langchain import BasePromptTemplate, LLMChain
+from langchain.callbacks.manager import CallbackManagerForChainRun
 from langchain.chains.base import Chain
-from langchain.prompts.base import BasePromptTemplate
+from langchain.chains.openai_functions import create_structured_output_chain
+from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate
 from langchain.schema import SystemMessage
-from langchain.chains.openai_functions import (
-    create_structured_output_chain,
-)
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain.schema.language_model import BaseLanguageModel
+from langchain.schema.messages import BaseMessageChunk
 from langchain.vectorstores import Chroma
+from pydantic import BaseModel, Field, Extra
 
 apiKey = os.getenv("OPENAI_API_KEY")
-
-
-from pydantic import BaseModel, Field
 
 
 class KeyQuestions(BaseModel):
     """The Key Questions."""
 
-    questions: List[str] = Field(..., description="the keyQuestions")
+    questions: List[str] = Field(..., description="the key Questions")
 
 
 class contextChain(Chain):
     prompt: BasePromptTemplate
-    llm: BaseLanguageModel
+    llm: BaseLanguageModel[BaseMessageChunk]
     iterations: int = 1
     output_key: str = "text"  #: :meta private:
     context: str = ""
-    db: Chroma = None
+    db: Chroma | None = None
 
-    class Config:
+    class Config(Chain.Config):
         extra = Extra.forbid
         arbitrary_types_allowed = True
 
@@ -62,10 +54,10 @@ class contextChain(Chain):
 
         self.db = Chroma(
             persist_directory="./langchainPages/db/chroma_db",
-            embedding_function=OpenAIEmbeddings(openai_api_key=apiKey),
+            embedding_function=OpenAIEmbeddings(openai_api_key=apiKey, client=None),
         )
 
-        for i in range(self.iterations):
+        for _ in range(self.iterations):
             keyQuestions = self.getKeyQuestions(prompt_value, run_manager=run_manager)
 
             for question in keyQuestions.questions:
@@ -75,39 +67,14 @@ class contextChain(Chain):
 
         return {self.output_key: response}
 
-    async def _acall(
-        self,
-        inputs: Dict[str, Any],
-        run_manager: Optional[AsyncCallbackManagerForChainRun] = None,
-    ) -> Dict[str, str]:
-        # Your custom chain logic goes here
-        # This is just an example that mimics LLMChain
-        prompt_value = self.prompt.format_prompt(**inputs)
-
-        # Whenever you call a language model, or another chain, you should pass
-        # a callback manager to it. This allows the inner run to be tracked by
-        # any callbacks that are registered on the outer run.
-        # You can always obtain a callback manager for this by calling
-        # `run_manager.get_child()` as shown below.
-        response = await self.llm.agenerate_prompt(
-            [prompt_value], callbacks=run_manager.get_child() if run_manager else None
-        )
-
-        # If you want to log something about this run, you can do so by calling
-        # methods on the `run_manager`, as shown below. This will trigger any
-        # callbacks that are registered for that event.
-        if run_manager:
-            await run_manager.on_text("Log something about this run")
-
-        return {self.output_key: response}
-
     def getKeyQuestions(
         self,
         prompt_value: str,
         run_manager: Optional[CallbackManagerForChainRun],
     ):
-        prompt_msgs = []
+        prompt_msgs: Sequence[SystemMessage | HumanMessagePromptTemplate] = []
         input = prompt_value
+        input_variables = ["input"]
         prompt_msgs.append(
             SystemMessage(
                 content="You are a System that can extract the key questions, that need to be answered for a detailed answer to a given question."
@@ -124,6 +91,7 @@ class contextChain(Chain):
                     "This is your context: {context}"
                 )
             )
+            input_variables.append("context")
             input = {"input": prompt_value, "context": self.context}
 
         prompt_msgs.append(
@@ -132,7 +100,10 @@ class contextChain(Chain):
             )
         )
 
-        prompt = ChatPromptTemplate(messages=prompt_msgs)
+        prompt = ChatPromptTemplate(
+            messages=prompt_msgs, input_variables=input_variables
+        )
+
         chain = create_structured_output_chain(
             output_schema=KeyQuestions,
             llm=self.llm,
@@ -146,7 +117,9 @@ class contextChain(Chain):
 
         return keyQuestions
 
-    def queryDatabaseAndAddToContext(self, input: str, answers=2):
+    def queryDatabaseAndAddToContext(self, input: str, answers: int = 2):
+        if self.db is None:
+            return
         docs = self.db.similarity_search(input, k=answers)
         for doc in docs:
             if doc.page_content not in self.context:
@@ -165,7 +138,9 @@ class contextChain(Chain):
             ),
         ]
 
-        prompt = ChatPromptTemplate(messages=prompt_msgs)
+        prompt = ChatPromptTemplate(
+            messages=prompt_msgs, input_variables=["input", "context"]
+        )
 
         chain = LLMChain(llm=self.llm, prompt=prompt, verbose=True)
 

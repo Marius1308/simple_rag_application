@@ -1,15 +1,13 @@
-import os
-from langchain.document_loaders import TextLoader
 from langchain.embeddings.openai import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.vectorstores import Chroma
-from pageLinks import root, pages
-import requests
 from langchain.document_loaders import BSHTMLLoader
-from html.parser import HTMLParser
+from pageLinks import pages
+import requests
+from data_supported_request.find_links_in_html_parser import FindLinksInHTMLParser
 
 
-def cutNewLines(page_content):
+def cut_new_lines(page_content: str):
     while "\n\n" in page_content:
         page_content = page_content.replace("\n\n", "\n")
     while page_content[-1] == "\n":
@@ -19,107 +17,88 @@ def cutNewLines(page_content):
     return page_content
 
 
-def addNewLine(page_content, chunk_size):
-    newPageContent = ""
+def add_new_lines(page_content: str, chunk_size: int):
+    new_page_content = ""
     buffer = chunk_size / 10
     added = False
-    for index, char in enumerate(page_content):
+    for char_index, char in enumerate(page_content):
         suffix = ""
         if (
-            index % chunk_size < buffer or index % chunk_size > chunk_size - buffer
-        ) and index != 0:
+            char_index % chunk_size < buffer
+            or char_index % chunk_size > chunk_size - buffer
+        ) and char_index != 0:
             if not added and char in [".", "!", "?"]:
                 suffix = "\n\n"
                 added = True
-        if not added and index % chunk_size == buffer:
+        if not added and char_index % chunk_size == buffer:
             suffix = "\n\n"
             added = True
-        if index % chunk_size == buffer + 1:
+        if char_index % chunk_size == buffer + 1:
             added = False
-        newPageContent += char + suffix
-    return newPageContent
+        new_page_content += char + suffix
+    return new_page_content
 
 
 parsedPages = []
 
 
-class MyHTMLParser(HTMLParser):
-    parsedPages = []
-
-    def handle_starttag(self, tag, attrs):
-        # Only parse the 'anchor' tag.
-        if tag == "a":
-            # Check the list of defined attributes.
-            for name, value in attrs:
-                # If href is defined, print it.
-                if name == "href":
-                    if value.startswith("/docs/") and not value.endswith(".html"):
-                        if value not in self.parsedPages:
-                            newPage = value
-                            if value.endswith("/"):
-                                newPage = value[:-1]
-                            self.parsedPages.append(newPage.replace("/docs/", ""))
-
-    def resetPages(self):
-        self.parsedPages = []
-
-
-def addPages(pages, root):
-    parser = MyHTMLParser()
-    paths = []
-    additionalPages = []
-    for page in pages:
-        response = requests.get(f"{root}/{page}")
+def add_pages(allPages: list[str], root: str):
+    parser = FindLinksInHTMLParser("/docs/")
+    paths: list[str] = []
+    additional_pages: list[str] = []
+    for p in allPages:
+        response = requests.get(f"{root}/{p}", timeout=10)
         if response.status_code != 200:
             continue
 
-        pageName = page.replace("/", "-")
-        pagePath = f"./langchainPages/html/{pageName}.html"
+        page_name = p.replace("/", "-")
+        page_path = f"./langchainPages/html/{page_name}.html"
 
-        responseText = response.content.decode("utf-8")
-        text_file = open(pagePath, "w")
-        text_file.write(responseText)
+        response_text = response.content.decode("utf-8")
+        text_file = open(page_path, "w", encoding="utf-8")
+        text_file.write(response_text)
         text_file.close()
-        paths.append(pagePath)
-        parser.resetPages()
-        parser.feed(responseText)
-        additionalPages += parser.parsedPages
-    return paths, additionalPages
+        paths.append(page_path)
+        parser.reset_pages()
+        parser.feed(response_text)
+        additional_pages += parser.parsed_pages
+    return paths, additional_pages
 
 
-root = "https://python.langchain.com/docs"
+ROOT = "https://python.langchain.com/docs"
 pages = [
     "get_started/introduction",
     "get_started/installation",
     "get_started/quickstart",
 ]
 addedPages = 0
-paths = []
+paths: list[str] = []
 
-hasNewPages = True
-while hasNewPages:
-    hasNewPages = False
-    newPaths, newPages = addPages(pages[addedPages:], root)
+has_new_pages = True
+
+while has_new_pages:
+    has_new_pages = False
+    newPaths, newPages = add_pages(pages[addedPages:], ROOT)
     addedPages = len(pages)
     print(addedPages)
     paths += newPaths
     for page in newPages:
         if page not in pages:
             pages.append(page)
-            hasNewPages = True
+            has_new_pages = True
 
 
 for path in paths:
     loader = BSHTMLLoader(path)
     raw_documents = loader.load()
     for index, document in enumerate(raw_documents):
-        raw_documents[index].page_content = addNewLine(
-            cutNewLines(document.page_content), 1000
+        raw_documents[index].page_content = add_new_lines(
+            cut_new_lines(document.page_content), 1000
         )
     text_splitter = CharacterTextSplitter(chunk_size=1200, chunk_overlap=0)
     documents = text_splitter.split_documents(raw_documents)
-    db2 = Chroma.from_documents(
+    Chroma.from_documents(  # type: ignore
         documents,
-        OpenAIEmbeddings(),
+        OpenAIEmbeddings(),  # type: ignore
         persist_directory="./langchainPages/db/chroma_db",
     )
