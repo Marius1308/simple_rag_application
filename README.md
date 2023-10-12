@@ -3,7 +3,7 @@ This Repo includes a RAG Application that uses information of the LangChain Docu
 Use this to executes querys to OpenAIs GPT-3.5 that will be expanded with related information from the Database.
 
 ## Setup
-- `requirements` installieren
+- Install `requirements`
 - Create `.env` file with `OPENAI_API_KEY` variable
 
 ## VertorDB
